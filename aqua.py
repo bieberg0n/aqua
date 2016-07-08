@@ -1,4 +1,5 @@
 import re
+import json
 # import multiprocessing
 import time
 from urllib.parse import urlparse#, urlunparse
@@ -45,9 +46,12 @@ def make_headers(headers):
 	return headers
 
 
+server_ = json.loads( open('aqua.json').read() )
+server = server_['server']
+port = server_['port']
 def childproxy(conn, addr, headers):
 	s = socket.socket()
-	s.connect( ('a.bjgong.tk', 8787 ) )
+	s.connect( (server, port ) )
 	s.sendall( headers.encode() )
 	s.settimeout(0.1)
 	conn.settimeout(0.1)
