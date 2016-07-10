@@ -1,9 +1,7 @@
 import re
 import json
-# import multiprocessing
 import time
 from urllib.parse import urlparse#, urlunparse
-# import proxy
 # from multiprocessing import Process
 # import ssl
 # import socket
@@ -46,40 +44,40 @@ def make_headers(headers):
 	return headers
 
 
-server_ = json.loads( open('aqua.json').read() )
-server = server_['server']
-port = server_['port']
-def childproxy(conn, addr, headers):
-	s = socket.socket()
-	s.connect( (server, port ) )
-	s.sendall( headers.encode() )
-	s.settimeout(0.1)
+def create_pipe(conn, serv, conn_name='', serv_name=''):
+	serv.settimeout(0.1)
 	conn.settimeout(0.1)
 	while 1:
 		try:
-			for buf in iter(lambda:s.recv(1024*8),b''):
-				# print('server:',len(buf))
-				conn.sendall(buf)
-			# print('server:b\'\'')
-			# print('server: {} close'.format(addr))
-			print('{} close'.format(addr) )
+			for buf in iter(lambda:conn.recv(1024*8),b''):
+				serv.sendall(buf)
+			print('server: {} client: {} close'.format(serv_name, conn_name) )
 			return
 		except socket.timeout:
 			try:
-				for buf in iter(lambda:conn.recv(1024*8),b''):
-					# print("conn:",len(buf))
-					s.sendall(buf)
-				# print('conn:b\'\'')
-				# print('client: {} close'.format(addr))
-				print('{} close'.format(addr) )
+				for buf in iter(lambda:serv.recv(1024*8),b''):
+					conn.sendall(buf)
+				print('server: {} client: {} close'.format(serv_name, conn_name) )
 				return
 			except socket.timeout:
 				sleep(0.1)
 				continue
 			except ConnectionResetError:
-				print('{} close'.format(addr) )
+				print('server: {} client: {} close'.format(serv_name, conn_name) )
 				return
-			
+		except ConnectionResetError:
+			print('server: {} client: {} close'.format(serv_name, conn_name) )
+			return	
+
+
+server_ = json.loads( open('aqua.json').read() )
+server = server_['server']
+port = server_['port']
+def childproxy(conn, headers, conn_name='', serv_name=''):
+	s = socket.socket()
+	s.connect( (server, port ) )
+	s.sendall( headers.encode() )
+	create_pipe(conn, s, conn_name, serv_name)
 
 
 def httpsproxy(conn, addr, raw_headers):
@@ -90,42 +88,14 @@ def httpsproxy(conn, addr, raw_headers):
 	try:
 		s.connect(address)
 	except socket.timeout:
-		black_list[address[0]] = None
+		black_list[address[0]] = True
 		with open('black.dat', 'w') as f:
 			f.write( '\n'.join( [ i for i in black_list.keys() ] ) )
-		childproxy(conn, addr, raw_headers)
+		childproxy(conn, raw_headers, conn_name=addr, serv_name=address[0])
 		return
 	else:
 		conn.sendall(b'HTTP/1.1 200 Connection established\r\n\r\n')
-		s.settimeout(0.1)
-		conn.settimeout(0.1)
-		while 1:
-			try:
-				for buf in iter(lambda:conn.recv(1024*8),b''):
-					# print("conn:",len(buf))
-					s.sendall(buf)
-				# print('conn:b\'\'')
-				# print('client: {} close'.format(addr))
-				print('server: {} client: {} close'.format(address[0], addr) )
-				return
-			except socket.timeout:
-				try:
-					for buf in iter(lambda:s.recv(1024*8),b''):
-						# print('server:',len(buf))
-						conn.sendall(buf)
-					# print('server:b\'\'')
-					# print('server: {} close'.format(address[0]))
-					print('server: {} client: {} close'.format(address[0], addr) )
-					return
-				except socket.timeout:
-					sleep(0.1)
-					continue
-				except ConnectionResetError:
-					print('server: {} client: {} close'.format(address[0], addr) )
-					return
-			except ConnectionResetError:
-				print('server: {} client: {} close'.format(address[0], addr) )
-				return
+		create_pipe(conn, s, conn_name=addr, serv_name=address[0])
 
 
 def httpproxy(conn, addr, headers):
@@ -206,17 +176,23 @@ def handle(conn, addr):
 
 	if black_list.get( serv ):
 		print( serv, 'black' )
-		childproxy(conn, addr, headers)
+		print(addr[0],
+			  '[{}]'.format(time.strftime('%Y-%m-%d %H:%M:%S')),
+			  headers.split('\r\n')[0])
+		childproxy(conn, headers, conn_name=addr[0])
 	elif method == 'CONNECT':
 		print(addr[0],
 			  '[{}]'.format(time.strftime('%Y-%m-%d %H:%M:%S')),
 			  headers.split('\r\n')[0])
-		httpsproxy(conn, addr, headers)
+		httpsproxy(conn, addr[0], headers)
 	else:
 		try:
-			httpproxy(conn, addr, headers)
+			httpproxy(conn, addr[0], headers)
 		except ConnectionResetError:
-			childproxy(conn, addr, headers)
+			black_list[serv] = True
+			with open('black.dat', 'w') as f:
+				f.write( '\n'.join( [ i for i in black_list.keys() ] ) )
+			childproxy(conn, headers, conn_name=addr[0])
 
 	
 # def main1():
