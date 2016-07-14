@@ -35,12 +35,17 @@ def parse_header(raw_headers):
 
 host_p = re.compile('http://.+?/')
 connection_p = re.compile('Connection: .+?\r\n')
+proxy_p = re.compile('Proxy-.+?\n')
 def make_headers(headers):
-	# headers = headers.replace('Proxy-', '')
+	if '\nConnection' in headers:
+		headers = proxy_p.sub('', headers)
+	else:
+		headers = headers.replace('Proxy-', '')
 	# headers = connection_p.sub('', headers)
 	headers = headers.split('\n')
 	headers[0] = host_p.sub('/', headers[0])
 	headers = '\n'.join(headers)
+	# print(headers)
 	return headers
 
 
@@ -84,7 +89,7 @@ def httpsproxy(conn, addr, raw_headers):
 	method, version, scm, address, path, params, query, fragment =\
 		parse_header(raw_headers)	
 	s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-	s.settimeout(5)
+	s.settimeout(7)
 	try:
 		s.connect(address)
 	except socket.timeout:
@@ -136,7 +141,7 @@ def httpproxy(conn, addr, headers):
 						buf = conn.recv(1024)#.decode('utf-8')
 						if b'\r\n\r\n' in buf:
 							buf = buf.split(b'\r\n\r\n')
-							buf[0] = make_headers(buf[0].decode('utf-8')).encode()#+b'\r\n\r\n'+ buf[1]
+							buf[0] = make_headers(buf[0].decode('utf-8','ignore')).encode()#+b'\r\n\r\n'+ buf[1]
 							buf = b'\r\n\r\n'.join(buf)
 							s.sendall(buf)
 							print(addr[0],
@@ -159,7 +164,7 @@ def httpproxy(conn, addr, headers):
 
 def handle(conn, addr):
 	headers = ''
-	for buf in iter( lambda:conn.recv(1).decode('utf-8'), ''):
+	for buf in iter( lambda:conn.recv(1).decode('utf-8','ignore'), ''):
 		headers += buf
 		if headers.endswith('\r\n\r\n'):
 			break
