@@ -54,13 +54,13 @@ def create_pipe(conn, serv, conn_name='', serv_name=''):
 	conn.settimeout(0.1)
 	while 1:
 		try:
-			for buf in iter(lambda:conn.recv(1024*8),b''):
+			for buf in iter(lambda:conn.recv(1024*4),b''):
 				serv.sendall(buf)
 			print('server: {} client: {} close'.format(serv_name, conn_name) )
 			return
 		except socket.timeout:
 			try:
-				for buf in iter(lambda:serv.recv(1024*8),b''):
+				for buf in iter(lambda:serv.recv(1024),b''):
 					conn.sendall(buf)
 				print('server: {} client: {} close'.format(serv_name, conn_name) )
 				return
@@ -70,7 +70,7 @@ def create_pipe(conn, serv, conn_name='', serv_name=''):
 			except ConnectionResetError:
 				print('server: {} client: {} close'.format(serv_name, conn_name) )
 				return
-		except ConnectionResetError:
+		except (ConnectionResetError, BrokenPipeError):
 			print('server: {} client: {} close'.format(serv_name, conn_name) )
 			return	
 
@@ -123,7 +123,7 @@ def httpproxy(conn, addr, headers):
 		raw_headers = headers
 		headers = make_headers(headers)
 		s.sendall(headers.encode())
-		print(addr[0],
+		print(addr,
 			  '[{}]'.format(time.strftime('%Y-%m-%d %H:%M:%S')),
 			  raw_headers.split('\r\n')[0])
 		while 1:
@@ -144,7 +144,7 @@ def httpproxy(conn, addr, headers):
 							buf[0] = make_headers(buf[0].decode('utf-8','ignore')).encode()#+b'\r\n\r\n'+ buf[1]
 							buf = b'\r\n\r\n'.join(buf)
 							s.sendall(buf)
-							print(addr[0],
+							print(addr,
 								  '[{}]'.format(time.strftime('%Y-%m-%d %H:%M:%S')),
 								  raw_headers.split('\r\n')[0])
 						elif buf == b'':
