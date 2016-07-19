@@ -67,12 +67,12 @@ def create_pipe(conn, serv, conn_name='', serv_name=''):
 			except socket.timeout:
 				sleep(0.1)
 				continue
-		# 	except ConnectionResetError:
-		# 		print('server: {} client: {} close'.format(serv_name, conn_name) )
-		# 		return
-		# except (ConnectionResetError, BrokenPipeError):
-		# 	print('server: {} client: {} close'.format(serv_name, conn_name) )
-		# 	return	
+			except ConnectionResetError:
+				print('server: {} client: {} close'.format(serv_name, conn_name) )
+				return
+		except (ConnectionResetError, BrokenPipeError):
+			print('server: {} client: {} close'.format(serv_name, conn_name) )
+			return
 
 
 server_ = json.loads( open('aqua.json').read() )
@@ -99,7 +99,7 @@ def httpsproxy(conn, addr, raw_headers):
 			with open('black.dat', 'w') as f:
 				f.write( '\n'.join( [ i for i in black_list.keys() ] ) )
 		else:
-			pre_list[address[0]] = True
+			pre_dict[address[0]] = True
 		childproxy(conn, raw_headers, conn_name=addr, serv_name=address[0])
 		return
 	else:
@@ -150,9 +150,16 @@ def httpproxy(conn, addr, headers):
 			except socket.timeout:
 				pass
 
-		for buf in iter(lambda:s.recv(1024*4), b''):
-			# print('server:', address[0], len(buf))
-			conn.sendall(buf)
+		try:
+			for buf in iter(lambda:s.recv(1024*4), b''):
+				# print('server:', address[0], len(buf))
+				conn.sendall(buf)
+		except ConnectionResetError:
+			black_list[address[0]] = True
+			with open('black.dat', 'w') as f:
+				f.write( '\n'.join( [ i for i in black_list.keys() ] ) )
+			childproxy(conn, raw_headers, conn_name=addr, serv_name=address[0])
+			return
 		# print('server: {} close'.format(address[0]))
 		# print('server: {} client: {} close'.format(
 		# 	address[0], addr) )
@@ -234,13 +241,13 @@ def handle(conn, addr):
 			  headers.split('\r\n')[0])
 		httpsproxy(conn, addr[0], headers)
 	else:
-		try:
-			httpproxy(conn, addr[0], headers)
-		except ConnectionResetError:
-			black_list[serv] = True
-			with open('black.dat', 'w') as f:
-				f.write( '\n'.join( [ i for i in black_list.keys() ] ) )
-			childproxy(conn, headers, conn_name=addr[0])
+		# try:
+		httpproxy(conn, addr[0], headers)
+		# except ConnectionResetError:
+		# 	black_list[serv] = True
+		# 	with open('black.dat', 'w') as f:
+		# 		f.write( '\n'.join( [ i for i in black_list.keys() ] ) )
+		# 	childproxy(conn, headers, conn_name=addr[0])
 
 	
 # def main1():
@@ -255,5 +262,5 @@ def handle(conn, addr):
 		
 # main1()
 black_list = { i.strip():True for i in open('black.dat').readlines() }
-pre_list = {}
+pre_dict = {}
 StreamServer(('0.0.0.0', 8087), handle).serve_forever()

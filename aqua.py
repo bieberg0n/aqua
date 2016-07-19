@@ -180,6 +180,12 @@ def httpproxy(conn, addr, headers):
 				# print('client: {} close'.format(addr))
 				print('server: {} client: {} close'.format(address[0], addr) )
 				return
+			except ConnectionResetError:
+				black_list[address[0]] = True
+				with open('black.dat', 'w') as f:
+					f.write( '\n'.join( [ i for i in black_list.keys() ] ) )
+				childproxy(conn, raw_headers, conn_name=addr, serv_name=address[0])
+				return
 
 
 def handle(conn, addr):
@@ -211,13 +217,8 @@ def handle(conn, addr):
 			  headers.split('\r\n')[0])
 		httpsproxy(conn, addr[0], headers)
 	else:
-		try:
-			httpproxy(conn, addr[0], headers)
-		except ConnectionResetError:
-			black_list[serv] = True
-			with open('black.dat', 'w') as f:
-				f.write( '\n'.join( [ i for i in black_list.keys() ] ) )
-			childproxy(conn, headers, conn_name=addr[0])
+		# try:
+		httpproxy(conn, addr[0], headers)
 
 	
 # def main1():
