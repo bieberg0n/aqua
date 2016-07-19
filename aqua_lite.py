@@ -67,12 +67,12 @@ def create_pipe(conn, serv, conn_name='', serv_name=''):
 			except socket.timeout:
 				sleep(0.1)
 				continue
-			except ConnectionResetError:
-				print('server: {} client: {} close'.format(serv_name, conn_name) )
-				return
-		except (ConnectionResetError, BrokenPipeError):
-			print('server: {} client: {} close'.format(serv_name, conn_name) )
-			return	
+		# 	except ConnectionResetError:
+		# 		print('server: {} client: {} close'.format(serv_name, conn_name) )
+		# 		return
+		# except (ConnectionResetError, BrokenPipeError):
+		# 	print('server: {} client: {} close'.format(serv_name, conn_name) )
+		# 	return	
 
 
 server_ = json.loads( open('aqua.json').read() )
@@ -90,7 +90,6 @@ def httpsproxy(conn, addr, raw_headers):
 		parse_header(raw_headers)	
 	s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 	s.settimeout(7)
-	# print(pre_dict)
 	try:
 		s.connect(address)
 	except socket.timeout:
@@ -100,7 +99,7 @@ def httpsproxy(conn, addr, raw_headers):
 			with open('black.dat', 'w') as f:
 				f.write( '\n'.join( [ i for i in black_list.keys() ] ) )
 		else:
-			pre_dict[address[0]] = True
+			pre_list[address[0]] = True
 		childproxy(conn, raw_headers, conn_name=addr, serv_name=address[0])
 		return
 	else:
@@ -118,11 +117,9 @@ def httpproxy(conn, addr, headers):
 
 	s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 	s.settimeout(7)
-	# print(pre_dict)
 	try:
 		s.connect(address)
 	# except socket.error:
-	# 	print(headers, 'close')
 	# 	s.close()
 	# 	return
 	except socket.timeout:
@@ -137,49 +134,75 @@ def httpproxy(conn, addr, headers):
 		return
 	else:
 		s.settimeout(None)
-		print('connect {} success'.format(address[0]))
-		s.settimeout(0.1)
-		conn.settimeout(0.1)
+		# print('connect {} success'.format(address[0]))
 		raw_headers = headers
-		headers = make_headers(headers)
+		headers = make_headers(headers).replace('keep-alive', 'close')
+		# print(headers)
 		s.sendall(headers.encode())
+
+		if headers.startswith('GET'):
+			pass
+		else:
+			conn.settimeout(0.1)
+			try:
+				for buf in iter(lambda:conn.recv(4096), b''):
+					s.sendall(buf)
+			except socket.timeout:
+				pass
+
+		for buf in iter(lambda:s.recv(1024*4), b''):
+			# print('server:', address[0], len(buf))
+			conn.sendall(buf)
+		# print('server: {} close'.format(address[0]))
+		# print('server: {} client: {} close'.format(
+		# 	address[0], addr) )
 		print(addr,
 			  '[{}]'.format(time.strftime('%Y-%m-%d %H:%M:%S')),
 			  raw_headers.split('\r\n')[0])
-		while 1:
-			try:
-				for buf in iter(lambda:s.recv(1024), b''):
-					# print('server:', address[0], len(buf))
-					conn.sendall(buf)
-				# print('server: {} close'.format(address[0]))
-				print('server: {} client: {} close'.format(
-					address[0], addr) )
-				return
-			except socket.timeout:
-				try:
-					while 1:
-						buf = conn.recv(1024)#.decode('utf-8')
-						if b'\r\n\r\n' in buf:
-							buf = buf.split(b'\r\n\r\n')
-							buf[0] = make_headers(buf[0].decode('utf-8','ignore')).encode()#+b'\r\n\r\n'+ buf[1]
-							buf = b'\r\n\r\n'.join(buf)
-							s.sendall(buf)
-							print(addr,
-								  '[{}]'.format(time.strftime('%Y-%m-%d %H:%M:%S')),
-								  raw_headers.split('\r\n')[0])
-						elif buf == b'':
-							# print('client: {} close'.format(addr))
-							print('server: {} client: {} close'.format(address[0], addr) )
-							return
-						else:
-							s.sendall(buf)
-				except socket.timeout:
-					sleep(0.1)
-					continue
-			except BrokenPipeError:
-				# print('client: {} close'.format(addr))
-				print('server: {} client: {} close'.format(address[0], addr) )
-				return
+		return
+
+		# s.settimeout(0.1)
+		# conn.settimeout(0.1)
+		# raw_headers = headers
+		# headers = make_headers(headers)
+		# s.sendall(headers.encode())
+		# print(addr,
+		# 	  '[{}]'.format(time.strftime('%Y-%m-%d %H:%M:%S')),
+		# 	  raw_headers.split('\r\n')[0])
+		# while 1:
+		# 	try:
+		# 		for buf in iter(lambda:s.recv(1024), b''):
+		# 			# print('server:', address[0], len(buf))
+		# 			conn.sendall(buf)
+		# 		# print('server: {} close'.format(address[0]))
+		# 		print('server: {} client: {} close'.format(
+		# 			address[0], addr) )
+		# 		return
+		# 	except socket.timeout:
+		# 		try:
+		# 			while 1:
+		# 				buf = conn.recv(1024)#.decode('utf-8')
+		# 				if b'\r\n\r\n' in buf:
+		# 					buf = buf.split(b'\r\n\r\n')
+		# 					buf[0] = make_headers(buf[0].decode('utf-8','ignore')).encode()#+b'\r\n\r\n'+ buf[1]
+		# 					buf = b'\r\n\r\n'.join(buf)
+		# 					s.sendall(buf)
+		# 					print(addr,
+		# 						  '[{}]'.format(time.strftime('%Y-%m-%d %H:%M:%S')),
+		# 						  raw_headers.split('\r\n')[0])
+		# 				elif buf == b'':
+		# 					# print('client: {} close'.format(addr))
+		# 					print('server: {} client: {} close'.format(address[0], addr) )
+		# 					return
+		# 				else:
+		# 					s.sendall(buf)
+		# 		except socket.timeout:
+		# 			sleep(0.1)
+		# 			continue
+		# 	except BrokenPipeError:
+		# 		# print('client: {} close'.format(addr))
+		# 		print('server: {} client: {} close'.format(address[0], addr) )
+		# 		return
 
 
 def handle(conn, addr):
@@ -232,5 +255,5 @@ def handle(conn, addr):
 		
 # main1()
 black_list = { i.strip():True for i in open('black.dat').readlines() }
-pre_dict = {}
+pre_list = {}
 StreamServer(('0.0.0.0', 8087), handle).serve_forever()
