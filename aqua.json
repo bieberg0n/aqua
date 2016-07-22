@@ -1,4 +1,6 @@
 {
+	"_commnet": " type can be  'http' or 'socks'. ",
+	"type":"socks",
 	"server":"127.0.0.1",
-	"port":"8787"
+	"port":"1080"
 }

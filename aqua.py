@@ -1,6 +1,7 @@
 import re
 import json
 import time
+import socks
 from urllib.parse import urlparse#, urlunparse
 # from multiprocessing import Process
 # import ssl
@@ -77,12 +78,77 @@ def create_pipe(conn, serv, conn_name='', serv_name=''):
 
 server_ = json.loads( open('aqua.json').read() )
 server = server_['server']
-port = server_['port']
+port = int(server_['port'])
+proxy_type = server_['type']
+if proxy_type == 'socks':
+	socks.set_default_proxy(socks.SOCKS5, server, port)
+else:
+	pass
 def childproxy(conn, headers, conn_name='', serv_name=''):
-	s = socket.socket()
-	s.connect( (server, port ) )
-	s.sendall( headers.encode() )
-	create_pipe(conn, s, conn_name, serv_name)
+	if proxy_type == 'http':
+		s = socket.socket()
+		s.connect( (server, port ) )
+		s.sendall( headers.encode() )
+		create_pipe(conn, s, conn_name, serv_name)
+	elif proxy_type == 'socks':
+		method, version, scm, address, path, params, query, fragment = parse_header(headers)
+		s = socks.socksocket()
+		s.connect(address)
+		print('connect {} success'.format(serv_name))
+		if headers.startswith('CONNECT'):
+			conn.sendall(b'HTTP/1.1 200 Connection established\r\n\r\n')
+			create_pipe(conn, s, conn_name=conn_name, serv_name=serv_name)
+		else:
+			s.settimeout(0.1)
+			conn.settimeout(0.1)
+			raw_headers = headers
+			headers = make_headers(headers)
+			s.sendall(headers.encode())
+			print(conn_name,
+				  '[{}]'.format(time.strftime('%Y-%m-%d %H:%M:%S')),
+				  raw_headers.split('\r\n')[0])
+			while 1:
+				try:
+					for buf in iter(lambda:s.recv(1024), b''):
+						conn.sendall(buf)
+					print('server: {} client: {} close'.format(
+						serv_name, conn_name) )
+					return
+				except socket.timeout:
+					try:
+						while 1:
+							buf = conn.recv(1024)#.decode('utf-8')
+							if b'\r\n\r\n' in buf:
+								buf = buf.split(b'\r\n\r\n')
+								buf[0] = make_headers(buf[0].decode('utf-8','ignore')).encode()#+b'\r\n\r\n'+ buf[1]
+								buf = b'\r\n\r\n'.join(buf)
+								s.sendall(buf)
+								print(conn_name,
+									  '[{}]'.format(time.strftime('%Y-%m-%d %H:%M:%S')),
+									  raw_headers.split('\r\n')[0])
+							elif buf == b'':
+								# print('client: {} close'.format(addr))
+								print('server: {} client: {} close'.format(serv_name, conn_name) )
+								return
+							else:
+								s.sendall(buf)
+					except socket.timeout:
+						sleep(0.1)
+						continue
+				except BrokenPipeError:
+					# print('client: {} close'.format(addr))
+					print('server: {} client: {} close'.format(serv_name, conn_name) )
+					return
+				except ConnectionResetError:
+					# black_list[address[0]] = True
+					# with open('black.dat', 'w') as f:
+					# 	f.write( '\n'.join( [ i for i in black_list.keys() ] ) )
+					# childproxy(conn, raw_headers, conn_name=addr, serv_name=address[0])
+					print('server: {} client: {} close'.format(serv_name, conn_name) )
+					return
+		
+	else:
+		return
 
 
 def httpsproxy(conn, addr, raw_headers):
@@ -234,4 +300,4 @@ def handle(conn, addr):
 # main1()
 black_list = { i.strip():True for i in open('black.dat').readlines() }
 pre_dict = {}
-StreamServer(('0.0.0.0', 8087), handle).serve_forever()
+StreamServer(('0.0.0.0', 2048), handle).serve_forever()
