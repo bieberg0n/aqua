@@ -109,7 +109,7 @@ def childproxy(conn, headers, conn_name='', serv_name=''):
 				  raw_headers.split('\r\n')[0])
 			while 1:
 				try:
-					for buf in iter(lambda:s.recv(1024), b''):
+					for buf in iter(lambda:s.recv(1024*16), b''):
 						conn.sendall(buf)
 					print('server: {} client: {} close'.format(
 						serv_name, conn_name) )
@@ -135,17 +135,17 @@ def childproxy(conn, headers, conn_name='', serv_name=''):
 					except socket.timeout:
 						sleep(0.1)
 						continue
-				except BrokenPipeError:
+				except (BrokenPipeError, ConnectionResetError):
 					# print('client: {} close'.format(addr))
 					print('server: {} client: {} close'.format(serv_name, conn_name) )
 					return
-				except ConnectionResetError:
-					# black_list[address[0]] = True
-					# with open('black.dat', 'w') as f:
-					# 	f.write( '\n'.join( [ i for i in black_list.keys() ] ) )
-					# childproxy(conn, raw_headers, conn_name=addr, serv_name=address[0])
-					print('server: {} client: {} close'.format(serv_name, conn_name) )
-					return
+				# except ConnectionResetError:
+				# 	# black_list[address[0]] = True
+				# 	# with open('black.dat', 'w') as f:
+				# 	# 	f.write( '\n'.join( [ i for i in black_list.keys() ] ) )
+				# 	# childproxy(conn, raw_headers, conn_name=addr, serv_name=address[0])
+				# 	print('server: {} client: {} close'.format(serv_name, conn_name) )
+				# 	return
 		
 	else:
 		return
@@ -161,12 +161,16 @@ def httpsproxy(conn, addr, raw_headers):
 		s.connect(address)
 	except socket.timeout:
 		s.settimeout(None)
-		if pre_dict.get(address[0]):
-			black_list[address[0]] = True
-			with open('black.dat', 'w') as f:
-				f.write( '\n'.join( [ i for i in black_list.keys() ] ) )
+		# if pre_dict.get(address[0]):
+		# 	black_list[address[0]] = True
+		# 	with open('black.dat', 'w') as f:
+		# 		f.write( '\n'.join( [ i for i in black_list.keys() ] ) )
+		if iscdn(address[0]):
+			pass
 		else:
-			pre_dict[address[0]] = True
+			addblack(address[0])
+		# else:
+		# 	pre_dict[address[0]] = True
 		childproxy(conn, raw_headers, conn_name=addr, serv_name=address[0])
 		return
 	else:
@@ -193,12 +197,17 @@ def httpproxy(conn, addr, headers):
 	# 	return
 	except socket.timeout:
 		s.settimeout(None)
-		if pre_dict.get(address[0]):
-			black_list[address[0]] = True
-			with open('black.dat', 'w') as f:
-				f.write( '\n'.join( [ i for i in black_list.keys() ] ) )
+		print(address[0],'timeout')
+		# if pre_dict.get(address[0]):
+		# 	black_list[address[0]] = True
+		# 	with open('black.dat', 'w') as f:
+		# 		f.write( '\n'.join( [ i for i in black_list.keys() ] ) )
+		# else:
+		# 	pre_dict[address[0]] = True
+		if iscdn(address[0]):
+			pass
 		else:
-			pre_dict[address[0]] = True
+			addblack(address[0])
 		childproxy(conn, headers, conn_name=addr, serv_name=address[0])
 		return
 	else:
@@ -214,7 +223,7 @@ def httpproxy(conn, addr, headers):
 			  raw_headers.split('\r\n')[0])
 		while 1:
 			try:
-				for buf in iter(lambda:s.recv(1024), b''):
+				for buf in iter(lambda:s.recv(1024*16), b''):
 					# print('server:', address[0], len(buf))
 					conn.sendall(buf)
 				# print('server: {} close'.format(address[0]))
@@ -225,9 +234,10 @@ def httpproxy(conn, addr, headers):
 				try:
 					while 1:
 						buf = conn.recv(1024)#.decode('utf-8')
+						print(buf)
 						if b'\r\n\r\n' in buf:
 							buf = buf.split(b'\r\n\r\n')
-							buf[0] = make_headers(buf[0].decode('utf-8','ignore')).encode()#+b'\r\n\r\n'+ buf[1]
+							# buf[0] = make_headers(buf[0].decode('utf-8','ignore')).encode()#+b'\r\n\r\n'+ buf[1]
 							buf = b'\r\n\r\n'.join(buf)
 							s.sendall(buf)
 							print(addr,
@@ -247,11 +257,33 @@ def httpproxy(conn, addr, headers):
 				print('server: {} client: {} close'.format(address[0], addr) )
 				return
 			except ConnectionResetError:
-				black_list[address[0]] = True
-				with open('black.dat', 'w') as f:
-					f.write( '\n'.join( [ i for i in black_list.keys() ] ) )
+				# black_list[address[0]] = True
+				# with open('black.dat', 'w') as f:
+				# 	f.write( '\n'.join( [ i for i in black_list.keys() ] ) )
 				childproxy(conn, raw_headers, conn_name=addr, serv_name=address[0])
 				return
+
+
+def isblack(domain):
+	if [ i for i in black_list if domain.endswith(i) ]:
+		return 1
+	else:
+		return 0
+
+
+def iscdn(domain):
+	if [ i for i in cdn_list if domain.endswith(i) ]:
+		return 1
+	else:
+		return 0
+
+
+def addblack(domain):
+	p = re.compile('[^\.]+\.[^\.]+$')
+	domain_end = '.' + p.findall(domain)[0]
+	black_list.add(domain_end)
+	with open('black.dat', 'w') as f:
+		f.write( '\n'.join( [ i for i in black_list ] ) )	  
 
 
 def handle(conn, addr):
@@ -271,7 +303,8 @@ def handle(conn, addr):
 	else:
 		serv = headers.split('\r\n')[1].split(' ')[1]
 
-	if black_list.get( serv ):
+	# if black_list.get( serv ):
+	if isblack(serv):
 		print( serv, 'black' )
 		print(addr[0],
 			  '[{}]'.format(time.strftime('%Y-%m-%d %H:%M:%S')),
@@ -287,17 +320,18 @@ def handle(conn, addr):
 		httpproxy(conn, addr[0], headers)
 
 	
-# def main1():
-# 	s = socket.socket()
-# 	s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-# 	s.bind(('0.0.0.0', 8087))
-# 	s.listen(1500)
-# 	while 1:
-# 		conn, addr = s.accept()
-# 		# multiprocessing.Process(target=handle,args=(conn,addr)).start()
-# 		threading.Thread(target=handle,args=(conn,addr)).start()
+def main1():
+	s = socket.socket()
+	s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+	s.bind(('0.0.0.0', 2048))
+	s.listen(1500)
+	while 1:
+		conn, addr = s.accept()
+		# multiprocessing.Process(target=handle,args=(conn,addr)).start()
+		threading.Thread(target=handle,args=(conn,addr)).start()
 		
-# main1()
-black_list = { i.strip():True for i in open('black.dat').readlines() }
+black_list = { i.strip() for i in open('black.dat').readlines() }
+cdn_list = { i.strip() for i in open('cdnlist.dat').readlines() }
 pre_dict = {}
+# main1()
 StreamServer(('0.0.0.0', 2048), handle).serve_forever()
