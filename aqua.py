@@ -1,13 +1,18 @@
+
+# Copyright 2016 bjong
+
 import re
 import json
 import time
-import socks
+# import socks
+import geventsocks
 from urllib.parse import urlparse#, urlunparse
 # from multiprocessing import Process
 # import ssl
 # import socket
 # from time import sleep
 # import threading
+import gevent
 from gevent.server import StreamServer
 from gevent import sleep, socket
 # monkey.patch_socket()
@@ -50,30 +55,55 @@ def make_headers(headers):
 	return headers
 
 
-def create_pipe(conn, serv, conn_name='', serv_name=''):
-	serv.settimeout(0.1)
-	conn.settimeout(0.1)
+def from_serv_to_cli(cli, serv, conn_name, serv_name, raw_headers=''):
+	print('from_serv_to_cli')
+	try:
+		for buf in iter(lambda:serv.recv(1024),b''):
+			# print(len(buf))
+			cli.sendall(buf)
+	except ConnectionResetError:
+		print('reset')
+		# childproxy(cli, raw_headers, conn_name=conn_name, serv_name=serv_name)
+	except OSError:
+		print('client: {} close'.format(conn_name) )
+		return
+	print('server: {} close'.format(serv_name) )
+	return
+
+
+def from_cli_to_serv(conn, s, conn_name, serv_name, raw_headers=''):
 	while 1:
-		try:
-			for buf in iter(lambda:conn.recv(1024*4),b''):
-				serv.sendall(buf)
+		buf = conn.recv(1024)
+		if b'\r\n\r\n' in buf:
+			buf = buf.split(b'\r\n\r\n')
+			buf[0] = make_headers(buf[0].decode('utf-8','ignore')).encode()
+			buf = b'\r\n\r\n'.join(buf)
+			s.sendall(buf)
+			print(conn_name,
+				  '[{}]'.format(time.strftime('%Y-%m-%d %H:%M:%S')),
+				  raw_headers.split('\r\n')[0])
+		elif buf == b'':
 			print('server: {} client: {} close'.format(serv_name, conn_name) )
 			return
-		except socket.timeout:
-			try:
-				for buf in iter(lambda:serv.recv(1024),b''):
-					conn.sendall(buf)
+		else:
+			s.sendall(buf)
+
+
+def create_pipe(conn, serv, conn_name='', serv_name=''):
+	print('create_pipe')
+	g = gevent.spawn(from_serv_to_cli, conn, serv, conn_name, serv_name)
+	try:
+		while 1:
+			for buf in iter(lambda:conn.recv(1024*4),b''):
+				serv.sendall(buf)
 				print('server: {} client: {} close'.format(serv_name, conn_name) )
-				return
-			except socket.timeout:
-				sleep(0.1)
-				continue
-			except ConnectionResetError:
-				print('server: {} client: {} close'.format(serv_name, conn_name) )
-				return
-		except (ConnectionResetError, BrokenPipeError):
-			print('server: {} client: {} close'.format(serv_name, conn_name) )
-			return	
+			return
+	except ConnectionResetError:
+		print('server: {} client: {} close'.format(serv_name, conn_name) )
+	except (ConnectionResetError, BrokenPipeError):
+		print('server: {} client: {} close'.format(serv_name, conn_name) )
+	g.kill()
+	return
 
 
 server_ = json.loads( open('aqua.json').read() )
@@ -81,10 +111,11 @@ server = server_['server']
 port = int(server_['port'])
 proxy_type = server_['type']
 if proxy_type == 'socks':
-	socks.set_default_proxy(socks.SOCKS5, server, port)
+	geventsocks.set_default_proxy(server, port)
 else:
 	pass
 def childproxy(conn, headers, conn_name='', serv_name=''):
+	print('childproxy')
 	if proxy_type == 'http':
 		s = socket.socket()
 		s.connect( (server, port ) )
@@ -92,66 +123,32 @@ def childproxy(conn, headers, conn_name='', serv_name=''):
 		create_pipe(conn, s, conn_name, serv_name)
 	elif proxy_type == 'socks':
 		method, version, scm, address, path, params, query, fragment = parse_header(headers)
-		s = socks.socksocket()
-		s.connect(address)
+		s = socket.socket()
+		geventsocks.connect(s, address)
 		print('connect {} success'.format(serv_name))
 		if headers.startswith('CONNECT'):
 			conn.sendall(b'HTTP/1.1 200 Connection established\r\n\r\n')
 			create_pipe(conn, s, conn_name=conn_name, serv_name=serv_name)
 		else:
-			s.settimeout(0.1)
-			conn.settimeout(0.1)
 			raw_headers = headers
 			headers = make_headers(headers)
 			s.sendall(headers.encode())
 			print(conn_name,
 				  '[{}]'.format(time.strftime('%Y-%m-%d %H:%M:%S')),
 				  raw_headers.split('\r\n')[0])
-			while 1:
-				try:
-					for buf in iter(lambda:s.recv(1024*16), b''):
-						conn.sendall(buf)
-					print('server: {} client: {} close'.format(
-						serv_name, conn_name) )
-					return
-				except socket.timeout:
-					try:
-						while 1:
-							buf = conn.recv(1024)#.decode('utf-8')
-							if b'\r\n\r\n' in buf:
-								buf = buf.split(b'\r\n\r\n')
-								buf[0] = make_headers(buf[0].decode('utf-8','ignore')).encode()#+b'\r\n\r\n'+ buf[1]
-								buf = b'\r\n\r\n'.join(buf)
-								s.sendall(buf)
-								print(conn_name,
-									  '[{}]'.format(time.strftime('%Y-%m-%d %H:%M:%S')),
-									  raw_headers.split('\r\n')[0])
-							elif buf == b'':
-								# print('client: {} close'.format(addr))
-								print('server: {} client: {} close'.format(serv_name, conn_name) )
-								return
-							else:
-								s.sendall(buf)
-					except socket.timeout:
-						sleep(0.1)
-						continue
-				except (BrokenPipeError, ConnectionResetError):
-					# print('client: {} close'.format(addr))
-					print('server: {} client: {} close'.format(serv_name, conn_name) )
-					return
-				# except ConnectionResetError:
-				# 	# black_list[address[0]] = True
-				# 	# with open('black.dat', 'w') as f:
-				# 	# 	f.write( '\n'.join( [ i for i in black_list.keys() ] ) )
-				# 	# childproxy(conn, raw_headers, conn_name=addr, serv_name=address[0])
-				# 	print('server: {} client: {} close'.format(serv_name, conn_name) )
-				# 	return
-		
-	else:
-		return
+			g = gevent.spawn(from_serv_to_cli, conn, s, conn_name, serv_name)
+			try:
+				from_cli_to_serv(conn, s, conn_name, serv_name)
+				# for buf in iter(lambda:conn.recv(1024*16), b''):
+				# 	s.sendall(buf)
+			except (BrokenPipeError, ConnectionResetError):
+				print('server: {} client: {} close'.format(serv_name, conn_name) )
+			g.kill()
+			return
 
 
 def httpsproxy(conn, addr, raw_headers):
+	print('httpsproxy')
 	method, version, scm, address, path, params, query, fragment =\
 		parse_header(raw_headers)	
 	s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -161,16 +158,10 @@ def httpsproxy(conn, addr, raw_headers):
 		s.connect(address)
 	except socket.timeout:
 		s.settimeout(None)
-		# if pre_dict.get(address[0]):
-		# 	black_list[address[0]] = True
-		# 	with open('black.dat', 'w') as f:
-		# 		f.write( '\n'.join( [ i for i in black_list.keys() ] ) )
 		if iscdn(address[0]):
 			pass
 		else:
 			addblack(address[0])
-		# else:
-		# 	pre_dict[address[0]] = True
 		childproxy(conn, raw_headers, conn_name=addr, serv_name=address[0])
 		return
 	else:
@@ -180,6 +171,7 @@ def httpsproxy(conn, addr, raw_headers):
 
 
 def httpproxy(conn, addr, headers):
+	print('httpproxy')
 	try:
 		method, version, scm, address, path, params, query, fragment =\
 			parse_header(headers)
@@ -210,62 +202,62 @@ def httpproxy(conn, addr, headers):
 			addblack(address[0])
 		childproxy(conn, headers, conn_name=addr, serv_name=address[0])
 		return
+	except:
+		return
 	else:
 		s.settimeout(None)
 		print('connect {} success'.format(address[0]))
-		s.settimeout(0.1)
-		conn.settimeout(0.1)
 		raw_headers = headers
 		headers = make_headers(headers)
 		s.sendall(headers.encode())
 		print(addr,
 			  '[{}]'.format(time.strftime('%Y-%m-%d %H:%M:%S')),
 			  raw_headers.split('\r\n')[0])
-		while 1:
-			try:
-				for buf in iter(lambda:s.recv(1024*16), b''):
-					# print('server:', address[0], len(buf))
-					conn.sendall(buf)
-				# print('server: {} close'.format(address[0]))
-				print('server: {} client: {} close'.format(
-					address[0], addr) )
-				return
-			except socket.timeout:
-				try:
-					while 1:
-						buf = conn.recv(1024)#.decode('utf-8')
-						print(buf)
-						if b'\r\n\r\n' in buf:
-							buf = buf.split(b'\r\n\r\n')
-							# buf[0] = make_headers(buf[0].decode('utf-8','ignore')).encode()#+b'\r\n\r\n'+ buf[1]
-							buf = b'\r\n\r\n'.join(buf)
-							s.sendall(buf)
-							print(addr,
-								  '[{}]'.format(time.strftime('%Y-%m-%d %H:%M:%S')),
-								  raw_headers.split('\r\n')[0])
-						elif buf == b'':
-							# print('client: {} close'.format(addr))
-							print('server: {} client: {} close'.format(address[0], addr) )
-							return
-						else:
-							s.sendall(buf)
-				except socket.timeout:
-					sleep(0.1)
-					continue
-			except BrokenPipeError:
-				# print('client: {} close'.format(addr))
-				print('server: {} client: {} close'.format(address[0], addr) )
-				return
-			except ConnectionResetError:
-				# black_list[address[0]] = True
-				# with open('black.dat', 'w') as f:
-				# 	f.write( '\n'.join( [ i for i in black_list.keys() ] ) )
-				childproxy(conn, raw_headers, conn_name=addr, serv_name=address[0])
-				return
+		g = gevent.spawn(from_cli_to_serv, conn, s, addr, address[0])
+				# for buf in iter(lambda:s.recv(1024*16), b''):
+				# 	conn.sendall(buf)
+				# print('server: {} client: {} close'.format(
+				# 	address[0], addr) )
+				# return
+		# try:
+		try:
+			# from_cli_to_serv(conn, s, address[0], addr)
+			
+		# except (BrokenPipeError, ConnectionResetError):
+		# 	print('server: {} client: {} close'.format(address[0], addr) )
+		# 	return
+			# while 1:
+			# 	buf = conn.recv(1024)#.decode('utf-8')
+			# 	print(buf)
+			# 	if b'\r\n\r\n' in buf:
+			# 		buf = buf.split(b'\r\n\r\n')
+			# 		buf = b'\r\n\r\n'.join(buf)
+			# 		s.sendall(buf)
+			# 		print(addr,
+			# 			  '[{}]'.format(time.strftime('%Y-%m-%d %H:%M:%S')),
+			# 			  raw_headers.split('\r\n')[0])
+			# 	elif buf == b'':
+			# 		print('server: {} client: {} close'.format(address[0], addr) )
+			# 		return
+			# 	else:
+			# 		s.sendall(buf)
+			for buf in iter(lambda:s.recv(1024*16), b''):
+				conn.sendall(buf)
+		except BrokenPipeError:
+			# print('client: {} close'.format(addr))
+			print('server: {} client: {} close'.format(address[0], addr) )
+		except ConnectionResetError:
+			# black_list[address[0]] = True
+			# with open('black.dat', 'w') as f:
+			# 	f.write( '\n'.join( [ i for i in black_list.keys() ] ) )
+			g.kill()
+			childproxy(conn, raw_headers, conn_name=addr, serv_name=address[0])
+		g.kill()
+		return
 
 
 def isblack(domain):
-	if [ i for i in black_list if domain.endswith(i) ]:
+	if [ i for i in black_list if domain.endswith(i) or i.endswith(domain)]:
 		return 1
 	else:
 		return 0
