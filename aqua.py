@@ -14,7 +14,7 @@ from urllib.parse import urlparse#, urlunparse
 # import threading
 import gevent
 from gevent.server import StreamServer
-from gevent import sleep, socket
+from gevent import sleep, socket, ssl
 # monkey.patch_socket()
 # monkey.patch_ssl()
 
@@ -56,10 +56,9 @@ def make_headers(headers):
 
 
 def from_serv_to_cli(cli, serv, conn_name, serv_name, raw_headers=''):
-	print('from_serv_to_cli')
 	try:
 		for buf in iter(lambda:serv.recv(1024),b''):
-			# print(len(buf))
+			# print(buf)
 			cli.sendall(buf)
 	except ConnectionResetError:
 		print('reset')
@@ -68,33 +67,47 @@ def from_serv_to_cli(cli, serv, conn_name, serv_name, raw_headers=''):
 		print('client: {} close'.format(conn_name) )
 		return
 	print('server: {} close'.format(serv_name) )
+	cli.close()
+	serv.close()
 	return
 
 
 def from_cli_to_serv(conn, s, conn_name, serv_name, raw_headers=''):
-	while 1:
-		buf = conn.recv(1024)
-		if b'\r\n\r\n' in buf:
-			buf = buf.split(b'\r\n\r\n')
-			buf[0] = make_headers(buf[0].decode('utf-8','ignore')).encode()
-			buf = b'\r\n\r\n'.join(buf)
-			s.sendall(buf)
-			print(conn_name,
-				  '[{}]'.format(time.strftime('%Y-%m-%d %H:%M:%S')),
-				  raw_headers.split('\r\n')[0])
-		elif buf == b'':
-			print('server: {} client: {} close'.format(serv_name, conn_name) )
-			return
-		else:
-			s.sendall(buf)
+	try:
+		while 1:
+			buf = conn.recv(1024)
+			if b'\r\n\r\n' in buf:
+				buf = buf.split(b'\r\n\r\n')
+				buf[0] = make_headers(buf[0].decode('utf-8','ignore')).encode()
+				buf = b'\r\n\r\n'.join(buf)
+				s.sendall(buf)
+				print(conn_name,
+					  '[{}]'.format(time.strftime('%Y-%m-%d %H:%M:%S')),
+					  raw_headers.split('\r\n')[0])
+			elif buf == b'':
+				print('server: {} client: {} close'.format(serv_name, conn_name) )
+				return
+			else:
+				s.sendall(buf)
+	except ConnectionResetError:
+		print('reset')
+		# childproxy(cli, raw_headers, conn_name=conn_name, serv_name=serv_name)
+	except OSError:
+		print('client: {} close'.format(conn_name) )
+		return
+	else:
+		print('server: {} close'.format(serv_name) )
+		conn.close()
+		s.close()
+		return
 
 
 def create_pipe(conn, serv, conn_name='', serv_name=''):
-	print('create_pipe')
 	g = gevent.spawn(from_serv_to_cli, conn, serv, conn_name, serv_name)
 	try:
 		while 1:
 			for buf in iter(lambda:conn.recv(1024*4),b''):
+				# print(buf)
 				serv.sendall(buf)
 				print('server: {} client: {} close'.format(serv_name, conn_name) )
 			return
@@ -102,25 +115,39 @@ def create_pipe(conn, serv, conn_name='', serv_name=''):
 		print('server: {} client: {} close'.format(serv_name, conn_name) )
 	except (ConnectionResetError, BrokenPipeError):
 		print('server: {} client: {} close'.format(serv_name, conn_name) )
-	g.kill()
+	except OSError:
+		return
+	else:
+		g.kill()
+		conn.close()
+		serv.close()
 	return
 
 
+
 server_ = json.loads( open('aqua.json').read() )
-server = server_['server']
-port = int(server_['port'])
+proxy_server = server_['server']
+proxy_port = int(server_['port'])
 proxy_type = server_['type']
 if proxy_type == 'socks':
-	geventsocks.set_default_proxy(server, port)
+	geventsocks.set_default_proxy(proxy_server, proxy_port)
 else:
 	pass
+def connect_proxy(conn, s, headers, conn_name, serv_name):
+	s.connect( (proxy_server, proxy_port ) )
+	# print(headers)
+	s.sendall( headers.encode() )
+	create_pipe(conn, s, conn_name, serv_name)
+
+
 def childproxy(conn, headers, conn_name='', serv_name=''):
-	print('childproxy')
 	if proxy_type == 'http':
 		s = socket.socket()
-		s.connect( (server, port ) )
-		s.sendall( headers.encode() )
-		create_pipe(conn, s, conn_name, serv_name)
+		connect_proxy(conn, s, headers, conn_name, serv_name)
+	elif proxy_type == 'https':
+		print('https')
+		sock = ssl.wrap_socket(socket.socket())
+		connect_proxy(conn, sock, headers, conn_name, serv_name)
 	elif proxy_type == 'socks':
 		method, version, scm, address, path, params, query, fragment = parse_header(headers)
 		s = socket.socket()
@@ -148,7 +175,6 @@ def childproxy(conn, headers, conn_name='', serv_name=''):
 
 
 def httpsproxy(conn, addr, raw_headers):
-	print('httpsproxy')
 	method, version, scm, address, path, params, query, fragment =\
 		parse_header(raw_headers)	
 	s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -171,7 +197,6 @@ def httpsproxy(conn, addr, raw_headers):
 
 
 def httpproxy(conn, addr, headers):
-	print('httpproxy')
 	try:
 		method, version, scm, address, path, params, query, fragment =\
 			parse_header(headers)
@@ -251,13 +276,19 @@ def httpproxy(conn, addr, headers):
 			# with open('black.dat', 'w') as f:
 			# 	f.write( '\n'.join( [ i for i in black_list.keys() ] ) )
 			g.kill()
+			s.close()
+			rst_list.add(address[0])
+			print(rst_list)
 			childproxy(conn, raw_headers, conn_name=addr, serv_name=address[0])
 		g.kill()
+		s.close()
+		conn.close()
 		return
 
 
 def isblack(domain):
-	if [ i for i in black_list if domain.endswith(i) or i.endswith(domain)]:
+	if [ i for i in black_list if domain.endswith(i) or i.endswith(domain)]\
+	or domain in rst_list:
 		return 1
 	else:
 		return 0
@@ -322,6 +353,7 @@ def main1():
 		# multiprocessing.Process(target=handle,args=(conn,addr)).start()
 		threading.Thread(target=handle,args=(conn,addr)).start()
 		
+rst_list = set()
 black_list = { i.strip() for i in open('black.dat').readlines() }
 cdn_list = { i.strip() for i in open('cdnlist.dat').readlines() }
 pre_dict = {}
